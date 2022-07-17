@@ -1,0 +1,311 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: Create uto scalling group
+#==================================================
+Metadata:
+  AWS::CloudFormation::Interface: 
+    ParameterGroups:
+      - 
+        Label: 
+          default: Export VPC Stack Name
+        Parameters:
+          - ExportVpcStackName
+      - 
+        Label: 
+          default: Export Application Laod Bbalancer Stack Name
+        Parameters:
+          - ExportAlbStackName
+      - 
+        Label: 
+          default: Email Address
+        Parameters:
+          - OperatorEMail
+      - 
+        Label: 
+          default: Image ID
+        Parameters:
+          - EC2ImageID
+      - 
+        Label: 
+          default: Launch Template Name
+        Parameters:
+          - ProdWebServerLaunchTemplateName
+      - 
+        Label: 
+          default: Instance Type
+        Parameters:
+          - InstanceType
+      - 
+        Label: 
+          default: EC2 KeyPair
+        Parameters:
+          - EC2KeyName
+#==================================================
+Parameters:
+  ExportVpcStackName:
+    Description: The name of the vpc stack that exports values
+    Type: String
+    Default: vpc
+
+  ExportAlbStackName:
+    Description: The name of the Application Load Balancer stack that exports values
+    Type: String
+    Default: elb
+
+  OperatorEMail:
+    Description: A valid EMail address to notify if there are any scaling operations
+    Type: String
+    Default: tech@dukapepe.tech
+
+  EC2KeyName:
+    Description: Name of an EC2 KeyPair to enable SSH access to the instance.
+    Type: AWS::EC2::KeyPair::KeyName
+    ConstraintDescription: Must be the name of an existing EC2 KeyPair.
+    Default: prod-jump-box
+
+  EC2ImageID:
+    Description: The ID of the custom AMI
+    Type: String
+    Default: ami-0d71ea30463e0ff8d
+
+  ProdWebServerLaunchTemplateName:
+    AllowedPattern: '[a-zA-Z0-9\(\)\.\-/_]+'
+    ConstraintDescription: Must be unique to this account.
+    Default: Prod-Lamp-Server-Launch-Template
+    Description: Name of launch template
+    Type: String
+
+  InstanceType:
+    Description: WebServers EC2 instance type
+    Type: String
+    Default: t2.large
+    AllowedValues:
+      - t1.micro
+      - t2.nano
+      - t2.micro
+      - t2.medium
+      - t2.large
+      - t2.xlarge
+    ConstraintDescription: Must be a valid EC2 instance type.
+
+#==================================================
+Resources:
+  ProdWebappApplication:
+    Type: "AWS::CodeDeploy::Application" 
+    Properties: 
+      ApplicationName: DukapepeApp
+      Tags: 
+        - Key: Name
+          Value: Prod Application
+
+  ProdWebappDeploymentGroup:
+    Type: "AWS::CodeDeploy::DeploymentGroup"
+    Properties:
+      ApplicationName: ProdWebServerAutoScalingGroup
+      ApplicationName: !Ref ProdWebappApplication
+      ServiceRoleArn: !GetAtt ProdCodeDeployRole.Arn
+      DeploymentConfigName: CodeDeployDefault.AllAtOnce
+      AutoScalingGroups:
+      - Ref: ProdWebServerAutoScalingGroup
+
+  ProdWebappDeploymentBucket:
+    Type: "AWS::S3::Bucket"
+    Properties:
+      BucketName: dukapepe-prod-codedeploy-s3-bucket
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Name
+          Value: Prod-Code deploy S3 storage
+      VersioningConfiguration:
+        Status: Enabled
+
+  ProdCodeDeployRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      RoleName: ProdCodeDeployRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: "Allow"
+            Principal:
+              Service:
+                - "codedeploy.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Policies:
+        -
+          PolicyName: allow-autoscaling
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              -
+                Effect: Allow
+                Action:
+                  - ec2:*
+                  - autoscaling:*
+                Resource: "*"
+  ProdWebappRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      RoleName: ProdWebappRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: "Allow"
+            Principal:
+              Service:
+                - "ec2.amazonaws.com"
+                - "codedeploy.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Policies:
+        -
+          PolicyName: "allow-webapp-deployment-bucket-bucket"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              -
+                Effect: "Allow"
+                Action: "s3:getObject"
+                Resource: !Sub arn:aws:s3:::${ProdWebappDeploymentBucket}/*
+
+  ProdWebappInstanceProfile:
+    Type: "AWS::IAM::InstanceProfile"
+    Properties:
+      Roles: 
+        - Ref: ProdWebappRole
+
+  ProdWebServerLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Ref ProdWebServerLaunchTemplateName
+      LaunchTemplateData:
+        IamInstanceProfile:
+          Arn: !GetAtt
+            - ProdWebappInstanceProfile
+            - Arn
+        ImageId: !Ref EC2ImageID
+        InstanceType: !Ref InstanceType
+        KeyName: !Ref EC2KeyName
+        UserData: 
+          Fn::Base64:
+              !Sub |
+              #!/bin/bash -xe
+              sudo su
+              yum update -y
+              yum install -y httpd wget telnet
+              service httpd start
+              yum install ruby -y 
+              yum install -y amazon-linux-extras
+              amazon-linux-extras enable php7.4
+              yum clean metadata
+              yum install -y php-cli php-pdo php-fpm php-json php-mysqlnd php-curl php-mbstring php-intl php-opcache php-soap php-gd php-xml php-mysqli
+              echo "<?php phpinfo(); ?>" > /var/www/html/phpinfo.php
+              echo "<html><body><b>Hello HTML</b></body></html>" > /var/www/html/index.html
+              service httpd restart
+              wget https://aws-codedeploy-${AWS::Region}.s3.${AWS::Region}.amazonaws.com/latest/install
+              chmod +x ./install
+              ./install auto
+              cd /tmp
+              yum install -y https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/linux_amd64/amazon-ssm-agent.rpm
+              systemctl enable amazon-ssm-agent
+              systemctl start amazon-ssm-agent
+        Monitoring:
+          Enabled: true
+        SecurityGroupIds:
+          - Fn::ImportValue: !Sub ${ExportVpcStackName}-ProdWebserverSecurityGroup
+
+
+  NotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      Subscription:
+        - Endpoint: !Ref OperatorEMail
+          Protocol: email
+
+#web server - public
+  ProdWebServerAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: ProdWebServerAutoScalingGroup
+      VPCZoneIdentifier:
+        - Fn::ImportValue: !Sub ${ExportVpcStackName}-PrivateSubnetA
+        - Fn::ImportValue: !Sub ${ExportVpcStackName}-PrivateSubnetB
+      HealthCheckGracePeriod: 300
+      HealthCheckType: ELB
+      LaunchTemplate:
+        LaunchTemplateName: !Ref ProdWebServerLaunchTemplateName
+        Version: !GetAtt ProdWebServerLaunchTemplate.LatestVersionNumber
+      MinSize: 2
+      MaxSize: 10
+      DesiredCapacity: 2
+      Tags:
+        - Key: Name
+          Value: ProdWebServers
+          PropagateAtLaunch: true
+      TargetGroupARNs:
+        - Fn::ImportValue: !Sub ${ExportAlbStackName}-ProdALBTargetGroup
+      NotificationConfiguration:
+        TopicARN: !Ref NotificationTopic
+        NotificationTypes:
+          - 'autoscaling:EC2_INSTANCE_LAUNCH'
+          - 'autoscaling:EC2_INSTANCE_LAUNCH_ERROR'
+          - 'autoscaling:EC2_INSTANCE_TERMINATE'
+          - 'autoscaling:EC2_INSTANCE_TERMINATE_ERROR'
+
+  ProdWebServerScaleUpPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      AutoScalingGroupName: !Ref ProdWebServerAutoScalingGroup
+      Cooldown: 60
+      ScalingAdjustment: 1
+
+  ProdWebServerScaleDownPolicy:
+    Type: 'AWS::AutoScaling::ScalingPolicy'
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      AutoScalingGroupName: !Ref ProdWebServerAutoScalingGroup
+      Cooldown: 60
+      ScalingAdjustment: -1
+
+  CPUAlarmHigh:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Scale-up if CPU > 90% for 10 minutes
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 90
+      AlarmActions:
+        - !Ref ProdWebServerScaleUpPolicy
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref ProdWebServerAutoScalingGroup
+      ComparisonOperator: GreaterThanThreshold
+
+  CPUAlarmLow:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Scale-down if CPU < 70% for 10 minutes
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 70
+      AlarmActions:
+        - !Ref ProdWebServerScaleDownPolicy
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref ProdWebServerAutoScalingGroup
+      ComparisonOperator: LessThanThreshold
+#==================================================
