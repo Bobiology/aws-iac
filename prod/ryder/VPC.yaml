@@ -1,0 +1,484 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+# Global variables
+
+Description:
+  'This template will create public and private subnets.'
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - 
+        Label:
+          default: "VPC CIDR"
+        Parameters:
+          - VpcCIDR 
+      -
+        Label:
+          default: Subnet CIDR 
+        Parameters:
+          - PublicSubnetACIDR
+          - PublicSubnetBCIDR
+          - PrivateSubnetACIDR
+          - PrivateSubnetBCIDR
+      - 
+        Label:
+          default: "SSH CIDR"
+        Parameters:
+          - SSHLocations
+      - 
+        Label:
+          default: "User/Project Info"
+        Parameters:
+          - Owner
+          - Project
+          - DeleteAfter
+
+Parameters:
+    VpcCIDR:
+      Default: 172.1.0.0/16
+      Description: "This is the IP ranges for the PROD-RYDER VPC (Classless Inter Domain Routing)"
+      Type: String
+
+    PublicSubnetACIDR:
+      Default: 172.1.0.0/24
+      Description: "This is the IP ranges for the PROD-RYDER public subnet 'public subnet A'"
+      Type: String 
+
+    PublicSubnetBCIDR:
+      Default: 172.1.1.0/24
+      Description: "This is the IP ranges for the PROD-RYDER public subnet 'public subnet B'"
+      Type: String 
+
+    PrivateSubnetACIDR: 
+      Default: 172.1.2.0/24
+      Description: "This is the IP ranges for the PROD-RYDER privare subnet 'private subnet A'."
+      Type: String 
+
+    PrivateSubnetBCIDR: 
+      Default: 172.1.3.0/24
+      Description: "This is the IP ranges for the PROD-RYDER privare subnet 'private subnet B'."
+      Type: String 
+
+    SSHLocations: 
+      AllowedPattern: '(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})' 
+      ConstraintDescription: 'Validate IP addresses of pattern x.x.x.x/x'
+      Default: 0.0.0.0/0
+      Description: 'Range of IP addresses that can be used to access EC2s(web servers) via SSH'
+      MaxLength: '18'
+      MinLength: '9'
+      Type: String
+
+    Owner:
+      Type: String
+      Default: Dukapepe-Ryder
+
+    DeleteAfter:
+      Type: String
+      Default: 01/12/2030
+
+    Project:
+      Type: String
+      Default: Security and Scalability Project 
+
+
+Resources:
+   VPC:
+      Type: AWS::EC2::VPC
+      Properties: 
+        CidrBlock: !Ref VpcCIDR
+        EnableDnsHostnames: true
+        EnableDnsSupport: true
+        InstanceTenancy: default 
+        Tags: 
+          - Key: Name 
+            Value: PROD-RYDER VPC 
+
+  #============================================================================#
+  # Intenet Gateway - for intenet access
+  #============================================================================#
+   InternetGateway:
+      Type: AWS::EC2::InternetGateway
+      Properties: 
+        Tags: 
+          - Key: Name
+            Value: PROD-RYDER Internet Gateway 
+
+   InternetGatewayAttachement:
+      Type: AWS::EC2::VPCGatewayAttachment
+      Properties: 
+        InternetGatewayId: !Ref InternetGateway
+        VpcId: !Ref VPC
+
+
+  #============================================================================#
+  # Public subnet
+  #============================================================================#
+
+   PublicSubnetA:
+      Type: AWS::EC2::Subnet
+      Properties: 
+        AvailabilityZone: eu-central-1a
+        CidrBlock: !Ref PublicSubnetACIDR
+        MapPublicIpOnLaunch: true
+        Tags: 
+          - Key: Name
+            Value: PROD-RYDER public subnet A
+        VpcId: !Ref VPC 
+
+   PublicSubnetB:
+      Type: AWS::EC2::Subnet
+      Properties: 
+        AvailabilityZone: eu-central-1b
+        CidrBlock: !Ref PublicSubnetBCIDR
+        MapPublicIpOnLaunch: true
+        Tags: 
+          - Key: Name
+            Value: PROD-RYDER public subnet B
+        VpcId: !Ref VPC
+
+   PublicRoutingATable:
+      Type: AWS::EC2::RouteTable
+      Properties: 
+        Tags: 
+          - Key: Name
+            Value: Public PROD-RYDER routing table A
+        VpcId: !Ref VPC 
+
+   PublicRoutingBTable:
+      Type: AWS::EC2::RouteTable
+      Properties: 
+        Tags: 
+          - Key: Name
+            Value: Public routing table B
+        VpcId: !Ref VPC 
+
+   PublicRouteA:
+      Type: AWS::EC2::Route
+      Properties: 
+        DestinationCidrBlock: 0.0.0.0/0 
+        GatewayId: !Ref InternetGateway
+        RouteTableId: !Ref PublicRoutingATable
+
+   PublicRouteB:
+      Type: AWS::EC2::Route
+      Properties: 
+        DestinationCidrBlock: 0.0.0.0/0 
+        GatewayId: !Ref InternetGateway
+        RouteTableId: !Ref PublicRoutingBTable
+
+   PublicSubnetRouteTableAssociation:
+      Type: AWS::EC2::SubnetRouteTableAssociation
+      Properties: 
+        RouteTableId: !Ref PublicRoutingATable
+        SubnetId: !Ref PublicSubnetA
+
+   PublicSubnetRouteTableBssociation:
+      Type: AWS::EC2::SubnetRouteTableAssociation
+      Properties: 
+        RouteTableId: !Ref PublicRoutingBTable
+        SubnetId: !Ref PublicSubnetB
+  #============================================================================#
+  # Private subnets
+  #============================================================================#
+
+   PrivateSubnetA:
+      Type: AWS::EC2::Subnet
+      Properties: 
+        AvailabilityZone: eu-central-1a
+        CidrBlock: !Ref PrivateSubnetACIDR
+        MapPublicIpOnLaunch: false
+        Tags: 
+          - Key: Name
+            Value: PROD-RYDER private subnet A
+        VpcId: !Ref VPC 
+
+   PrivateSubnetB:
+      Type: AWS::EC2::Subnet
+      Properties: 
+        AvailabilityZone: eu-central-1b
+        CidrBlock: !Ref PrivateSubnetBCIDR
+        MapPublicIpOnLaunch: false
+        Tags: 
+          - Key: Name
+            Value: PROD-RYDER private subnet B
+        VpcId: !Ref VPC         
+
+  #============================================================================#
+  # Nat gateway - for private subnet access to intenet and other aws resources
+  #============================================================================#
+   NatGatewayAEIP:
+      Type: AWS::EC2::EIP
+      Properties:
+        Domain: VPC
+        Tags: 
+          - Key: Name
+            Value: PROD-RYDER EIP A
+
+   NatGatewayBEIP:
+      Type: AWS::EC2::EIP
+      Properties:
+        Domain: VPC
+        Tags: 
+          - Key: Name
+            Value: PROD-RYDER EIP B
+
+   NatGatewayA:
+      Type: AWS::EC2::NatGateway
+      Properties:
+        AllocationId: !GetAtt NatGatewayAEIP.AllocationId
+        SubnetId: !Ref PublicSubnetA
+        Tags: 
+          - Key: Name
+            Value: PROD-RYDER NatGateway public sabnet A 
+
+   NatGatewayB:
+      Type: AWS::EC2::NatGateway
+      Properties:
+        AllocationId: !GetAtt NatGatewayBEIP.AllocationId
+        SubnetId: !Ref PublicSubnetB
+        Tags: 
+          - Key: Name
+            Value: PROD-RYDER NatGateway public sabnet B
+
+   PrivateRouteTableA:
+      Type: AWS::EC2::RouteTable
+      Properties:
+         Tags:
+           - Key: Name
+             Value: PROD-RYDER Private route table A
+         VpcId: !Ref VPC
+
+   PrivateRouteTableB:
+      Type: AWS::EC2::RouteTable
+      Properties:
+         Tags:
+           - Key: Name
+             Value: PROD-RYDER Private route table B
+         VpcId: !Ref VPC
+
+   PrivateRouteA:
+      Type: AWS::EC2::Route
+      Properties:
+         DestinationCidrBlock: 0.0.0.0/0
+         NatGatewayId: !Ref NatGatewayA
+         RouteTableId: !Ref PrivateRouteTableA
+
+   PrivateRouteB:
+      Type: AWS::EC2::Route
+      Properties:
+         DestinationCidrBlock: 0.0.0.0/0
+         NatGatewayId: !Ref NatGatewayB
+         RouteTableId: !Ref PrivateRouteTableB
+
+   PrivateSubnetARouteTableAssociation:
+      Type: AWS::EC2::SubnetRouteTableAssociation
+      Properties:
+        RouteTableId: !Ref PrivateRouteTableA
+        SubnetId: !Ref PrivateSubnetA
+
+   PrivateSubnetBRouteTableAssociation:
+      Type: AWS::EC2::SubnetRouteTableAssociation
+      Properties:
+        RouteTableId: !Ref PrivateRouteTableB
+        SubnetId: !Ref PrivateSubnetB
+
+  #============================================================================#
+  # LB security group
+  #============================================================================#
+   ProdApplicationLBSecurityGroup:
+        Type: AWS::EC2::SecurityGroup
+        Properties: 
+          GroupDescription: Enable HTTP and HTTPS access via port 80 and 443
+          SecurityGroupIngress: 
+            - IpProtocol: tcp 
+              FromPort: 80
+              ToPort: 80
+              CidrIp: 0.0.0.0/0
+            - IpProtocol: tcp 
+              FromPort: 443
+              ToPort: 443
+              CidrIp: 0.0.0.0/0  
+          Tags: 
+            - Key: Name 
+              Value: PROD-RYDER Application Load Balancer SecurityGroup
+          VpcId: !Ref VPC
+
+  #============================================================================#
+  # SSH security group
+  #============================================================================#
+   ProdJumpBoxSecurityGroup:
+        Type: AWS::EC2::SecurityGroup
+        Properties: 
+          GroupDescription: Enable SSH access via port 22
+          SecurityGroupIngress:  
+            - IpProtocol: tcp 
+              FromPort: 22
+              ToPort: 22
+              CidrIp: 0.0.0.0/0
+            - IpProtocol: icmp 
+              FromPort: -1
+              ToPort: -1
+              CidrIp: 0.0.0.0/0
+            - IpProtocol: tcp 
+              FromPort: 3305
+              ToPort: 3305
+              CidrIp: 0.0.0.0/0
+          Tags: 
+            - Key: Name 
+              Value: PROD-RYDER Jump Box SecurityGroup
+          VpcId: !Ref VPC
+
+   ProdSSHSecurityGroup:
+        Type: AWS::EC2::SecurityGroup
+        Properties: 
+          GroupDescription: Enable SSH access via port 22
+          SecurityGroupIngress: 
+            - IpProtocol: tcp 
+              FromPort: 22
+              ToPort: 22
+              CidrIp: 0.0.0.0/0
+            - IpProtocol: icmp 
+              FromPort: -1
+              ToPort: -1
+              CidrIp: 0.0.0.0/0
+          Tags: 
+            - Key: Name 
+              Value: PROD-RYDER Restricted SSH SecurityGroup
+          VpcId: !Ref VPC 
+  #============================================================================#
+  # Web server security group
+  #============================================================================#
+   ProdWebserverSecurityGroup:
+        Type: AWS::EC2::SecurityGroup
+        Properties: 
+          GroupDescription: Accept traffic from ALB 
+          SecurityGroupIngress: 
+            - IpProtocol: tcp 
+              FromPort: 80
+              ToPort: 80
+              SourceSecurityGroupId: !Ref ProdApplicationLBSecurityGroup
+            - IpProtocol: tcp 
+              FromPort: 443
+              ToPort: 443
+              SourceSecurityGroupId: !Ref ProdApplicationLBSecurityGroup  
+            - IpProtocol: tcp 
+              FromPort: 22
+              ToPort: 22
+              CidrIp: 0.0.0.0/0
+            - IpProtocol: icmp 
+              FromPort: -1
+              ToPort: -1
+              CidrIp: 0.0.0.0/0
+          Tags: 
+            - Key: Name 
+              Value: PROD-RYDER Web Server SecurityGroup
+          VpcId: !Ref VPC
+
+#====================ACLs================================  
+  # Public Network ACL
+   PublicNetworkAcl:
+     Type: AWS::EC2::NetworkAcl
+     DependsOn: VPC
+     Properties:
+       VpcId: !Ref VPC
+       Tags:
+        - Key: Name
+          Value: !Join [ "", [ !Ref "AWS::StackName", "-public-acl" ] ]
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Project
+          Value: !Ref Project
+        - Key: DeleteAfter
+          Value: !Ref DeleteAfter
+
+   InboundSSHNACL:
+     Type: AWS::EC2::NetworkAclEntry
+     Properties:
+       NetworkAclId: !Ref PublicNetworkAcl
+       RuleNumber: '300'
+       Protocol: "6"
+       RuleAction: "allow"
+       Egress: "false"
+       CidrBlock: 0.0.0.0/0
+       PortRange:
+         From: '22'
+         To: '22'
+
+   InboundICMPNACL:
+     Type: AWS::EC2::NetworkAclEntry
+     Properties:
+       NetworkAclId: !Ref PublicNetworkAcl
+       RuleNumber: '500'
+       Protocol: "1"
+       RuleAction: "allow"
+       Egress: "false"
+       CidrBlock: 0.0.0.0/0
+       Icmp:
+         Code: "-1"
+         Type: "-1"        
+#====================================================
+Outputs:
+   VPC:
+     Description: Export VPC ID 
+     Export:
+       Name: !Sub ${AWS::StackName}-VPC
+     Value: !Ref VPC 
+
+   PublicSubnetA:
+     Description: Export public subnet A ID 
+     Export:
+       Name: !Sub ${AWS::StackName}-PublicSubnetA
+     Value: !Ref PublicSubnetA    
+
+   PublicSubnetB:
+     Description: Export public subnet B ID 
+     Export:
+       Name: !Sub ${AWS::StackName}-PublicSubnetB
+     Value: !Ref PublicSubnetB
+
+   PrivateSubnetA:
+     Description: Export private subnet A ID 
+     Export:
+       Name: !Sub ${AWS::StackName}-PrivateSubnetA
+     Value: !Ref PrivateSubnetA  
+
+   PrivateSubnetB:
+     Description: Export private subnet B ID 
+     Export:
+       Name: !Sub ${AWS::StackName}-PrivateSubnetB
+     Value: !Ref PrivateSubnetB      
+
+   ProdApplicationLBSecurityGroup:
+     Description: Export Application LB Security Group ID 
+     Export:
+       Name: !Sub ${AWS::StackName}-ProdApplicationLBSecurityGroup
+     Value: !Ref ProdApplicationLBSecurityGroup
+
+   ProdSSHSecurityGroup:
+     Description: Export SSH SecurityGroup ID 
+     Export:
+       Name: !Sub ${AWS::StackName}-ProdSSHSecurityGroup
+     Value: !Ref ProdSSHSecurityGroup
+
+   ProdWebserverSecurityGroup:
+     Description: Export Web server SecurityGroup ID 
+     Export:
+       Name: !Sub ${AWS::StackName}-ProdWebserverSecurityGroup
+     Value: !Ref ProdWebserverSecurityGroup      
+
+   ProdJumpBoxSecurityGroup:
+     Description: Export JumpBox SecurityGroup ID 
+     Export:
+       Name: !Sub ${AWS::StackName}-ProdJumpBoxSecurityGroup
+     Value: !Ref ProdJumpBoxSecurityGroup
+
+
+
+
+
+
+
+
+
+

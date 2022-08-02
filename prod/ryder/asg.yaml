@@ -1,0 +1,311 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: Create auto scalling group
+#==================================================
+Metadata:
+  AWS::CloudFormation::Interface: 
+    ParameterGroups:
+      - 
+        Label: 
+          default: Export VPC Stack Name
+        Parameters:
+          - ExportVpcStackName
+      - 
+        Label: 
+          default: Export Application Laod Balancer Stack Name
+        Parameters:
+          - ExportAlbStackName
+      - 
+        Label: 
+          default: Email Address
+        Parameters:
+          - OperatorEMail
+      - 
+        Label: 
+          default: Image ID
+        Parameters:
+          - EC2ImageID
+      - 
+        Label: 
+          default: Launch Template Name
+        Parameters:
+          - ProdRyderWebServerLaunchTemplateName
+      - 
+        Label: 
+          default: Instance Type
+        Parameters:
+          - InstanceType
+      - 
+        Label: 
+          default: EC2 KeyPair
+        Parameters:
+          - EC2KeyName
+#==================================================
+Parameters:
+  ExportVpcStackName:
+    Description: The name of the vpc stack that exports values
+    Type: String
+    Default: vpc
+
+  ExportAlbStackName:
+    Description: The name of the Application Load Balancer stack that exports values
+    Type: String
+    Default: elb
+
+  OperatorEMail:
+    Description: A valid EMail address to notify if there are any scaling operations
+    Type: String
+    Default: tech@dukapepe.tech
+
+  EC2KeyName:
+    Description: Name of an EC2 KeyPair to enable SSH access to the instance.
+    Type: AWS::EC2::KeyPair::KeyName
+    ConstraintDescription: Must be the name of an existing EC2 KeyPair.
+    Default: prod-ryder-jump-box
+
+  EC2ImageID:
+    Description: The ID of the custom AMI
+    Type: String
+    Default: ami-0c956e207f9d113d5
+
+  ProdRyderWebServerLaunchTemplateName:
+    AllowedPattern: '[a-zA-Z0-9\(\)\.\-/_]+'
+    ConstraintDescription: Must be unique to this account.
+    Default: Prod-Lamp-Server-Launch-Template
+    Description: Name of launch template
+    Type: String
+
+  InstanceType:
+    Description: WebServers EC2 instance type
+    Type: String
+    Default: t2.large
+    AllowedValues:
+      - t1.micro
+      - t2.nano
+      - t2.micro
+      - t2.medium
+      - t2.large
+      - t2.xlarge
+    ConstraintDescription: Must be a valid EC2 instance type.
+
+#==================================================
+Resources:
+  ProdRyderWebappApplication:
+    Type: "AWS::CodeDeploy::Application" 
+    Properties: 
+      ApplicationName: RyderApp
+      Tags: 
+        - Key: Name
+          Value: Prod Ryder Application
+
+  ProdWebappDeploymentGroup:
+    Type: "AWS::CodeDeploy::DeploymentGroup"
+    Properties:
+      ApplicationName: ProdRyderWebServerAutoScalingGroup
+      ApplicationName: !Ref ProdRyderWebappApplication
+      ServiceRoleArn: !GetAtt ProdRyderCodeDeployRole.Arn
+      DeploymentConfigName: CodeDeployDefault.AllAtOnce
+      AutoScalingGroups:
+      - Ref: ProdRyderWebServerAutoScalingGroup
+
+  ProdRyderWebAppDeploymentBucket:
+    Type: "AWS::S3::Bucket"
+    Properties:
+      BucketName: dukapepe-prod-ryder-codedeploy-s3-bucket
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Name
+          Value: Prod-Ryder-Code deploy S3 storage
+      VersioningConfiguration:
+        Status: Enabled
+
+  ProdRyderCodeDeployRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      RoleName: ProdRyderCodeDeployRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: "Allow"
+            Principal:
+              Service:
+                - "codedeploy.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Policies:
+        -
+          PolicyName: allow-autoscaling
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              -
+                Effect: Allow
+                Action:
+                  - ec2:*
+                  - autoscaling:*
+                Resource: "*"
+  ProdRyderWebAppRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      RoleName: ProdRyderWebAppRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: "Allow"
+            Principal:
+              Service:
+                - "ec2.amazonaws.com"
+                - "codedeploy.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Policies:
+        -
+          PolicyName: "allow-webapp-deployment-bucket-bucket"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              -
+                Effect: "Allow"
+                Action: "s3:getObject"
+                Resource: !Sub arn:aws:s3:::${ProdRyderWebAppDeploymentBucket}/*
+
+  ProdRyderWebappInstanceProfile:
+    Type: "AWS::IAM::InstanceProfile"
+    Properties:
+      Roles: 
+        - Ref: ProdRyderWebAppRole
+
+  ProdRyderWebServerLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Ref ProdRyderWebServerLaunchTemplateName
+      LaunchTemplateData:
+        IamInstanceProfile:
+          Arn: !GetAtt
+            - ProdRyderWebappInstanceProfile
+            - Arn
+        ImageId: !Ref EC2ImageID
+        InstanceType: !Ref InstanceType
+        KeyName: !Ref EC2KeyName
+        UserData: 
+          Fn::Base64:
+              !Sub |
+              #!/bin/bash -xe
+              sudo su
+              yum update -y
+              yum install -y httpd wget telnet
+              service httpd start
+              yum install ruby -y 
+              yum install -y amazon-linux-extras
+              amazon-linux-extras enable php7.4
+              yum clean metadata
+              yum install -y php-cli php-pdo php-fpm php-json php-mysqlnd php-curl php-mbstring php-intl php-opcache php-soap php-gd php-xml php-mysqli
+              echo "<?php phpinfo(); ?>" > /var/www/html/phpinfo.php
+              echo "<html><body><b>Hello HTML</b></body></html>" > /var/www/html/index1.html
+              service httpd restart
+              wget https://aws-codedeploy-${AWS::Region}.s3.${AWS::Region}.amazonaws.com/latest/install
+              chmod +x ./install
+              ./install auto
+              cd /tmp
+              yum install -y https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/linux_amd64/amazon-ssm-agent.rpm
+              systemctl enable amazon-ssm-agent
+              systemctl start amazon-ssm-agent
+        Monitoring:
+          Enabled: true
+        SecurityGroupIds:
+          - Fn::ImportValue: !Sub ${ExportVpcStackName}-ProdRyderWebserverSecurityGroup
+
+
+  NotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      Subscription:
+        - Endpoint: !Ref OperatorEMail
+          Protocol: email
+
+#web server - public
+  ProdRyderWebServerAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: ProdRyderWebServerAutoScalingGroup
+      VPCZoneIdentifier:
+        - Fn::ImportValue: !Sub ${ExportVpcStackName}-PrivateSubnetA
+        - Fn::ImportValue: !Sub ${ExportVpcStackName}-PrivateSubnetB
+      HealthCheckGracePeriod: 300
+      HealthCheckType: ELB
+      LaunchTemplate:
+        LaunchTemplateName: !Ref ProdRyderWebServerLaunchTemplateName
+        Version: !GetAtt ProdRyderWebServerLaunchTemplate.LatestVersionNumber
+      MinSize: 2
+      MaxSize: 10
+      DesiredCapacity: 2
+      Tags:
+        - Key: Name
+          Value: ProdRyderWebServers
+          PropagateAtLaunch: true
+      TargetGroupARNs:
+        - Fn::ImportValue: !Sub ${ExportAlbStackName}-ProdRyderALBTargetGroup
+      NotificationConfiguration:
+        TopicARN: !Ref NotificationTopic
+        NotificationTypes:
+          - 'autoscaling:EC2_INSTANCE_LAUNCH'
+          - 'autoscaling:EC2_INSTANCE_LAUNCH_ERROR'
+          - 'autoscaling:EC2_INSTANCE_TERMINATE'
+          - 'autoscaling:EC2_INSTANCE_TERMINATE_ERROR'
+
+  ProdRyderWebServerScaleUpPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      AutoScalingGroupName: !Ref ProdRyderWebServerAutoScalingGroup
+      Cooldown: 60
+      ScalingAdjustment: 1
+
+  ProdRyderWebServerScaleDownPolicy:
+    Type: 'AWS::AutoScaling::ScalingPolicy'
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      AutoScalingGroupName: !Ref ProdRyderWebServerAutoScalingGroup
+      Cooldown: 60
+      ScalingAdjustment: -1
+
+  CPUAlarmHigh:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Scale-up if CPU > 90% for 10 minutes
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 90
+      AlarmActions:
+        - !Ref ProdRyderWebServerScaleUpPolicy
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref ProdRyderWebServerAutoScalingGroup
+      ComparisonOperator: GreaterThanThreshold
+
+  CPUAlarmLow:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Scale-down if CPU < 70% for 10 minutes
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 70
+      AlarmActions:
+        - !Ref ProdRyderWebServerScaleDownPolicy
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref ProdRyderWebServerAutoScalingGroup
+      ComparisonOperator: LessThanThreshold
+#==================================================

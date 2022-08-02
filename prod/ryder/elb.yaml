@@ -1,0 +1,164 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: Create Prod-ryder application load balancer
+#=========================================
+Metadata:
+  AWS::CloudFormation::Interface: 
+    ParameterGroups:
+      - 
+        Label: 
+          default: "Certificate Arn"
+        Parameters:
+          - AcmCertificate
+      - 
+        Label: 
+          default: "Export VPC Stack Name"
+        Parameters:
+          - ExportVpcStackName
+      - 
+        Label: 
+          default: "EC2 Parameters"
+        Parameters:
+          - AmazonImageID
+          - InstanceType
+          - KeyName
+#=========================================
+Parameters:
+  AcmCertificate:
+    Description: Certificate's ARN
+    Type: String
+    Default: arn:aws:acm:eu-central-1:553469508124:certificate/b283cc29-e955-444e-b989-ebcfbf7fd9fe
+
+  ExportVpcStackName:
+    Description: Name of the VPC that exports values
+    Type: String
+    Default: vpc
+
+  InstanceType:
+    Description: WebServer EC2 instance type
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+      - t1.micro
+      - t2.nano
+      - t2.micro
+    ConstraintDescription: Must be a valid EC2 instance type.
+
+  KeyName:
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the instance
+    Type: 'AWS::EC2::KeyPair::KeyName'
+    ConstraintDescription: must be the name of an existing EC2 KeyPair.
+    Default: prod-jump-box
+
+  AmazonImageID:
+    Description: The ID of the Amazon machine image (AMI)
+    Type: String
+    Default: ami-0c956e207f9d113d5
+
+
+#=========================================
+Resources:
+#Create an Application Load Balancer
+  ProdRyderApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: ProdRyderApplicationLoadBalancer
+      SecurityGroups: 
+        - Fn::ImportValue: !Sub ${ExportVpcStackName}-ProdApplicationLBSecurityGroup
+      Subnets: 
+         - Fn::ImportValue: !Sub ${ExportVpcStackName}-PublicSubnetA
+         - Fn::ImportValue: !Sub ${ExportVpcStackName}-PublicSubnetB
+
+#Create a Listener on Port 80
+  ProdALBListenerNoSslCertificate:
+    Type: 'AWS::ElasticLoadBalancingV2::Listener'
+    Properties:
+      DefaultActions:
+        - RedirectConfig:
+            Host: '#{host}'
+            Path: '/#{path}'
+            Port: '443'
+            Protocol: HTTPS
+            StatusCode: HTTP_301
+          Type: redirect
+      LoadBalancerArn: !Ref ProdRyderApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+
+#Create a Listener on Port 443
+  ProdALBListenerSslCertificate:
+    Type : AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      Certificates: 
+        - CertificateArn: !Ref AcmCertificate
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ProdRyderALBTargetGroup
+      LoadBalancerArn: !Ref ProdRyderApplicationLoadBalancer
+      Port: 443
+      Protocol: HTTPS
+
+# Create a Target Group
+  ProdRyderALBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 60
+      HealthCheckPath: /index1.html
+      HealthCheckTimeoutSeconds: 10
+      HealthyThresholdCount: 2
+      Matcher:
+        HttpCode: 200,302
+      Name: ProdRyderWebServers
+      Port: 80
+      Protocol: HTTP
+      #Targets:
+      #  - Id: !Ref EC2InstanceA
+      #    Port: 80
+      TargetType: instance
+      UnhealthyThresholdCount: 5
+      VpcId: 
+         Fn::ImportValue: !Sub ${ExportVpcStackName}-VPC
+
+  EC2InstanceB:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      SubnetId:
+        Fn::ImportValue: !Sub ${ExportVpcStackName}-PublicSubnetA
+      SecurityGroupIds:
+        - Fn::ImportValue: !Sub ${ExportVpcStackName}-ProdJumpBoxSecurityGroup
+      KeyName: !Ref KeyName
+      ImageId: !Ref AmazonImageID 
+      Tags:
+        - Key: Name
+          Value: Prod Ryder Public Subnet A | Jump Box
+      UserData:
+        Fn::Base64:
+          !Sub |
+            #!/bin/bash -xe
+            sudo su
+            yum update -y
+            yum install -y wget telnet
+
+#=========================================
+Outputs:
+# Export Target Group
+  ProdRyderALBTargetGroup:
+    Description: Export web server TargetGroup
+    Export:
+      Name: !Sub ${AWS::StackName}-ProdRyderALBTargetGroup
+    Value: !Ref ProdRyderALBTargetGroup
+
+# Export Application Load Balancer Dns Name
+  ProdApplicationLoadBalancerDnsName:
+    Description: Export Application LoadBalancer DNS Name
+    Export:
+      Name: !Sub ${AWS::StackName}-ProdApplicationLoadBalancerDnsName
+    Value: !GetAtt ProdRyderApplicationLoadBalancer.DNSName
+
+# Export Application Load Balancer Zone ID
+  ProdApplicationLoadBalancerZoneID:
+    Description: Export Application LoadBalancer ZoneID
+    Export:
+      Name: !Sub ${AWS::StackName}-ProdApplicationLoadBalancerZoneID
+    Value: !GetAtt ProdRyderApplicationLoadBalancer.CanonicalHostedZoneID
